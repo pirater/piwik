@@ -21,10 +21,4 @@ class Conversion extends LogTable
     {
         return true;
     }
-    
-    public function shouldJoinWithSubSelect($table)
-    {
-        // if conversions are joined on visits, we need a complex join
-        return $table == 'log_visits';
-    }
 }

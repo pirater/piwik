@@ -39,9 +39,4 @@ abstract class LogTable {
         return;
     }
 
-    public function shouldJoinWithSubSelect($table)
-    {
-        return false;
-    }
-
 }
