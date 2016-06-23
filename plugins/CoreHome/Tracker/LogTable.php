@@ -12,7 +12,7 @@ abstract class LogTable {
     // this would could be more generic eg by specifiying "this->joinableOn = array('action' => 'idaction') and this
     // would allow to also add more complex structures in the future but not needed for now I'd say. Let's go with
     // simpler, more clean and expressive solution for now until needed.
-    public function canBeJoinedOnIdAction()
+    public function canBeJoinedOnAction()
     {
         return false;
     }
@@ -34,7 +34,7 @@ abstract class LogTable {
      *
      * @return LogTable
      */
-    public function getTableToJoinOnIdVisit()
+    public function getLinkTableToBeAbleToJoinOnVisit()
     {
         return;
     }

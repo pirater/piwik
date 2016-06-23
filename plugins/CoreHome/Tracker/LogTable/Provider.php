@@ -12,8 +12,6 @@ class Provider {
 
     public function __construct()
     {
-        // it is important we always return the same instance, and not a newly created instance otherwise logQueryBuilder
-        // set method is not applied
         $this->tables = array(
             new Visit(),
             new LinkVisitAction(),

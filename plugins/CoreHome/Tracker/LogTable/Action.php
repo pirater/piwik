@@ -17,7 +17,7 @@ class Action extends LogTable
         return 'log_action';
     }
 
-    public function canBeJoinedOnIdAction()
+    public function canBeJoinedOnAction()
     {
         return true;
     }
@@ -27,7 +27,7 @@ class Action extends LogTable
         return 'idaction';
     }
 
-    public function getTableToJoinOnIdVisit()
+    public function getLinkTableToBeAbleToJoinOnVisit()
     {
         return new LinkVisitAction();
     }

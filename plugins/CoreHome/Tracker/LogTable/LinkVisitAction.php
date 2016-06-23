@@ -17,7 +17,7 @@ class LinkVisitAction extends LogTable
         return 'log_link_visit_action';
     }
 
-    public function canBeJoinedOnIdAction()
+    public function canBeJoinedOnAction()
     {
         return true;
     }

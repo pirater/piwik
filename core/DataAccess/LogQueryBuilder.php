@@ -122,101 +122,95 @@ class LogQueryBuilder
      */
     private function generateJoinsString(&$tables)
     {
-        $tablesAvailable = array();
+        $availableLogTables = array();
         $joinWithSubSelect = false;
         $sql = '';
 
-        $customJoins = array();
+        $nonVisitJoins = array();
+
+        /**
+         * Holds the actual log table instances whereas $tables holds the table names
+         * @var LogTable[]|array $logTables
+         */
+        $logTables = array();
 
         foreach ($tables as $table) {
             if (is_array($table)) {
+                $logTables[] = $table;
+            } else {
+                $logTable = $this->logTableProvider->findLogTable($table);
+
+                if (empty($logTable)) {
+                    throw new Exception("Table '$table' can't be used for segmentation");
+                }
+
+                $logTables[] = $logTable;
+            }
+        }
+
+        foreach ($logTables as $index => $logTable) {
+            if (is_array($logTable)) {
                 continue;
             }
-            
-            $logTable = $this->logTableProvider->findLogTable($table);
+
             if (!$logTable->canBeJoinedOnIdVisit()) {
-                $tableToJoin = $logTable->getTableToJoinOnIdVisit();
+                $tableToJoin = $logTable->getLinkTableToBeAbleToJoinOnVisit();
 
-                // in this case they must be joinable by idActions
+                // in this case they must be joinable by action/idAction
+                if (!$tableToJoin->canBeJoinedOnAction()) {
+                    throw new Exception('The link table "%s" to join on visit - as returned by "%s" - is not joinable by an action', $tableToJoin->getName(), $logTable->getName());
+                }
 
-                if ($tableToJoin->canBeJoinedOnIdAction() && !in_array($tableToJoin->getName(), $tables)) {
-                    $tables[] = $tableToJoin->getName(); // in theory we would need to check whether $tableToJoin can be joined
-                    // on IdVisit and if not get another table
-                } else if (!$tableToJoin->canBeJoinedOnIdAction()) {
-                    throw new Exception('the table to join on idaction is not joinable by idaction');
+                if ($tableToJoin->canBeJoinedOnAction() && !in_array($tableToJoin->getName(), $tables)) {
+                    // in theory we would need to check whether $tableToJoin can be joined with visits and if not add
+                    // another table, but we won't do this for now as not needed yet. There can be currently only one
+                    // "link" table to link to idvisit.
+                    $logTables[] = $tableToJoin;
+                    $tables[] = $tableToJoin->getName();
                 }
 
                 $defaultLogActionJoin = sprintf("%s.%s = %s.%s", $tableToJoin->getName(), $tableToJoin->getColumnToJoinOnIdAction(),
                                                                  $logTable->getName(), $logTable->getColumnToJoinOnIdAction());
 
-                if ($this->hasTableAddedManually($table, $tables)
-                    && !$this->hasJoinedTableAlreadyManually($table, $defaultLogActionJoin, $tables)) {
-                    $tableIndex = $this->findIndexOfManuallyAddedTable($table, $tables);
+                $altDefaultLogActionJoin = sprintf("%s.%s = %s.%s", $logTable->getName(), $logTable->getColumnToJoinOnIdAction(),
+                                                                    $tableToJoin->getName(), $tableToJoin->getColumnToJoinOnIdAction());
+
+                if ($index > 0
+                    && $this->hasTableAddedManually($logTable->getName(), $tables)
+                    && !$this->hasJoinedTableAlreadyManually($logTable->getName(), $defaultLogActionJoin, $tables)
+                    && !$this->hasJoinedTableAlreadyManually($logTable->getName(), $altDefaultLogActionJoin, $tables)) {
+                    $tableIndex = $this->findIndexOfManuallyAddedTable($logTable->getName(), $tables);
                     $defaultLogActionJoin = '(' . $tables[$tableIndex]['joinOn'] . ' AND ' . $defaultLogActionJoin . ')';
                     unset($tables[$tableIndex]);
                 }
 
-                $customJoins[$logTable->getName()] = array($tableToJoin->getName() => $defaultLogActionJoin);
-                $customJoins[$tableToJoin->getName()] = array($logTable->getName() => $defaultLogActionJoin);
+                $nonVisitJoins[$logTable->getName()] = array($tableToJoin->getName() => $defaultLogActionJoin);
+                $nonVisitJoins[$tableToJoin->getName()] = array($logTable->getName() => $defaultLogActionJoin);
             }
         }
 
         // we need to make sure first table always comes first, then sort tables afterwards
         // if table cannot be joined, find out how to join
-
         $firstTable = array_shift($tables);
-
-        $coreSort = array('log_link_visit_action' => 0, 'log_action' => 1, 'log_visit' => 2, 'log_conversion' => 3, 'log_conversion_item' => 4);
-        usort($tables, function ($tA, $tB) use ($coreSort) {
-            if (is_array($tA)) {
-                return -1;
-            }
-            if (is_array($tB)) {
-                return 1;
-            }
-
-            if (isset($coreSort[$tA])) {
-                $indexA = $coreSort[$tA];
-            } else {
-                $indexA = 999;
-            }
-            if (isset($coreSort[$tB])) {
-                $indexB = $coreSort[$tB];
-            } else {
-                $indexB = 999;
-            }
-
-            if ($indexA === $indexB) {
-                return 0;
-            }
-
-            if ($indexA > $indexB) {
-                return 1;
-            }
-
-            return -1;
-        });
-
+        usort($tables, array($this, 'sortTablesForJoin'));
         array_unshift($tables, $firstTable);
 
-        foreach ($tables as $i => $table) {
-            if (is_array($table)) {
+        $firstTable = array_shift($logTables);
+        usort($logTables, array($this, 'sortTablesForJoin'));
+        array_unshift($logTables, $firstTable);
+
+        foreach ($logTables as $i => $logTable) {
+            if (is_array($logTable)) {
 
                 // join condition provided
-                $alias = isset($table['tableAlias']) ? $table['tableAlias'] : $table['table'];
+                $alias = isset($logTable['tableAlias']) ? $logTable['tableAlias'] : $logTable['table'];
                 $sql .= "
-				LEFT JOIN " . Common::prefixTable($table['table']) . " AS " . $alias
-                    . " ON " . $table['joinOn'];
+				LEFT JOIN " . Common::prefixTable($logTable['table']) . " AS " . $alias
+                    . " ON " . $logTable['joinOn'];
                 continue;
             }
 
-            $tableSql = Common::prefixTable($table) . " AS $table";
-
-            $logTable = $this->logTableProvider->findLogTable($table);
-
-            if (empty($logTable)) {
-                throw new Exception("Table '$table' can't be used for segmentation");
-            }
+            $tableSql = Common::prefixTable($logTable->getName()) . " AS " . $logTable->getName();
 
             if ($i == 0) {
                 // first table
@@ -230,37 +224,36 @@ class LogQueryBuilder
                 $alternativeJoin = '';
                 $join = null;
 
-                foreach ($tablesAvailable as $availableTable => $true) {
-                    $availableLogTable = $this->logTableProvider->findLogTable($availableTable);
+                foreach ($availableLogTables as $availableLogTable) {
                     if ($logTable->canBeJoinedOnIdVisit() &&
                         $availableLogTable->canBeJoinedOnIdVisit()) {
                         $join = sprintf("%s.%s = %s.%s", $logTable->getName(), $logTable->getColumnToJoinOnIdVisit(),
-                                                         $availableTable, $availableLogTable->getColumnToJoinOnIdVisit());
-                        $alternativeJoin = sprintf("%s.%s = %s.%s", $availableTable, $availableLogTable->getColumnToJoinOnIdVisit(),
+                                                         $availableLogTable->getName(), $availableLogTable->getColumnToJoinOnIdVisit());
+                        $alternativeJoin = sprintf("%s.%s = %s.%s", $availableLogTable->getName(), $availableLogTable->getColumnToJoinOnIdVisit(),
                                                                     $logTable->getName(), $logTable->getColumnToJoinOnIdVisit());
 
-                        if ($availableTable == 'log_visit') {
+                        if ($availableLogTable->getName() == 'log_visit') {
                             $joinWithSubSelect = true;
                         }
 
                         break;
                     }
 
-                    if ($logTable->canBeJoinedOnIdAction() && $availableLogTable->canBeJoinedOnIdAction()) {
-                        $join = $customJoins[$logTable->getName()][$availableLogTable->getName()];
+                    if ($logTable->canBeJoinedOnAction() && $availableLogTable->canBeJoinedOnAction()) {
+                        $join = $nonVisitJoins[$logTable->getName()][$availableLogTable->getName()];
 
                         break;
                     }
                 }
 
                 if (!isset($join)) {
-                    throw new Exception("Table '$table' can't be joined for segmentation");
+                    throw new Exception("Table '" . $logTable->getName() ."' can't be joined for segmentation");
                 }
                 // if we cannot join on idvisit, in theory, we need to find a table to join via idvisit
 
-                if ($this->hasJoinedTableAlreadyManually($table, $join, $tables)
-                    || $this->hasJoinedTableAlreadyManually($table, $alternativeJoin, $tables)) {
-                    $tablesAvailable[$logTable->getName()] = true;
+                if ($this->hasJoinedTableAlreadyManually($logTable->getName(), $join, $tables)
+                    || $this->hasJoinedTableAlreadyManually($logTable->getName(), $alternativeJoin, $tables)) {
+                    $availableLogTables[$logTable->getName()] = $logTable;
                     continue;
                 }
 
@@ -269,7 +262,7 @@ class LogQueryBuilder
 				LEFT JOIN $tableSql ON $join";
             }
 
-            $tablesAvailable[$logTable->getName()] = true;
+            $availableLogTables[$logTable->getName()] = $logTable;
         }
 
         $return = array(
@@ -278,6 +271,50 @@ class LogQueryBuilder
         );
 
         return $return;
+    }
+
+    public function sortTablesForJoin($tA, $tB)
+    {
+        $coreSort = array('log_link_visit_action' => 0, 'log_action' => 1, 'log_visit' => 2, 'log_conversion' => 3, 'log_conversion_item' => 4);
+
+        if (is_array($tA) && is_array($tB)) {
+            return 0;
+        }
+        if (is_array($tA)) {
+            return -1;
+        }
+        if (is_array($tB)) {
+            return 1;
+        }
+
+        if (is_object($tA)) {
+            $tA = $tA->getName();
+        }
+
+        if (is_object($tB)) {
+            $tB = $tB->getName();
+        }
+
+        if (isset($coreSort[$tA])) {
+            $weightA = $coreSort[$tA];
+        } else {
+            $weightA = 999;
+        }
+        if (isset($coreSort[$tB])) {
+            $weightB = $coreSort[$tB];
+        } else {
+            $weightB = 999;
+        }
+
+        if ($weightA === $weightB) {
+            return 0;
+        }
+
+        if ($weightA > $weightB) {
+            return 1;
+        }
+
+        return -1;
     }
 
 
